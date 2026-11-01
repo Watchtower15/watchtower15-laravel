@@ -10,7 +10,20 @@
     },
     "require": {
         "php": "^8.3",
-        "composer-runtime-api": "^2.2"
+        "composer-runtime-api": "^2.2",
+        "guzzlehttp/guzzle": "^7.8.2 || ^8.0",
+        "illuminate/cache": "^12.69 || ^13.0",
+        "illuminate/console": "^12.69 || ^13.0",
+        "illuminate/container": "^12.69 || ^13.0",
+        "illuminate/contracts": "^12.69 || ^13.0",
+        "illuminate/database": "^12.69 || ^13.0",
+        "illuminate/events": "^12.69 || ^13.0",
+        "illuminate/http": "^12.69 || ^13.0",
+        "illuminate/log": "^12.69 || ^13.0",
+        "illuminate/support": "^12.69 || ^13.0",
+        "psr/http-message": "^1.1 || ^2.0",
+        "psr/log": "^1.1 || ^2.0 || ^3.0",
+        "watchtower15/sdk": "self.version"
     },
     "autoload": {
         "psr-4": {
@@ -20,6 +33,16 @@
     "autoload-dev": {
         "psr-4": {
             "WatchTower15\\Laravel\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "WatchTower15\\Laravel\\Wt15ServiceProvider"
+            ],
+            "aliases": {
+                "Wt15": "WatchTower15\\Laravel\\Facades\\Wt15"
+            }
         }
     }
 }
