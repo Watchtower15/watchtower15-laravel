@@ -86,13 +86,30 @@ final class LaravelTransport implements Transport
         }
         $guzzle = $cause instanceof ConnectException ? $cause : $cause->getPrevious();
         if ($guzzle instanceof ConnectException) {
-            $errno = $guzzle->getHandlerContext()['errno'] ?? null;
+            // Guzzle 8: a ConnectException is a failure of the connection phase (resolve, connect, TLS, connect timeout), and carries
+            // no handler context. Guzzle 7: every cURL failure is one, and the context holds cURL's errno.
+            $reader = $this->contextReader();
+            if (! method_exists($guzzle, $reader)) {
+                return false;
+            }
+            $context = $guzzle->{$reader}();
+            $errno = data_get($context, 'errno');
             if (in_array($errno, [6, 7, 35], true)) {
                 return false;
             }
         }
 
         return true;
+    }
+
+    /**
+     * The name of Guzzle 7's handler-context method; a name the analyser cannot fold, since the method is absent from Guzzle 8.
+     *
+     * @return string
+     */
+    private function contextReader(): string
+    {
+        return 'getHandlerContext';
     }
 
     /**

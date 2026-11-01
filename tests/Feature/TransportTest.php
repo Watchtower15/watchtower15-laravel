@@ -52,16 +52,19 @@ final class TransportTest extends TestCase
     /** @return iterable<string, array{\Closure, bool}> */
     public static function failures(): iterable
     {
-        yield 'a failed connection (no handler context)' => [static fn () => Http::failedConnection(), true];
-        yield 'cURL 7 (connect)' => [static fn (): \Closure => static fn (Request $request) => Create::rejectionFor(
-            new ConnectException('cURL error 7: connect', $request->toPsrRequest(), null, ['errno' => 7]),
-        ), false];
-        yield 'cURL 6 (resolve)' => [static fn (): \Closure => static fn (Request $request) => Create::rejectionFor(
-            new ConnectException('cURL error 6: resolve', $request->toPsrRequest(), null, ['errno' => 6]),
-        ), false];
-        yield 'cURL 28 (timeout)' => [static fn (): \Closure => static fn (Request $request) => Create::rejectionFor(
-            new ConnectException('cURL error 28: timeout', $request->toPsrRequest(), null, ['errno' => 28]),
-        ), true];
+        // Guzzle 7 puts cURL's errno in a ConnectException's handler context; Guzzle 8 has no context and throws a ConnectException
+        // for the connection phase alone, so a timeout after the connection is a NetworkTimeoutException there.
+        $guzzle7 = method_exists(ConnectException::class, 'getHandlerContext');
+        $connect = static fn (int $errno, string $message): \Closure => static fn (Request $request) => Create::rejectionFor(
+            new ConnectException($message, $request->toPsrRequest(), null, ['errno' => $errno]),
+        );
+
+        yield 'a failed connection (no handler context)' => [static fn () => Http::failedConnection(), $guzzle7];
+        yield 'cURL 7 (connect)' => [static fn (): \Closure => $connect(7, 'cURL error 7: connect'), false];
+        yield 'cURL 6 (resolve)' => [static fn (): \Closure => $connect(6, 'cURL error 6: resolve'), false];
+        yield 'cURL 28 (timeout)' => [static fn (): \Closure => $guzzle7
+            ? $connect(28, 'cURL error 28: timeout')
+            : static fn (Request $request) => Create::rejectionFor(new \GuzzleHttp\Exception\NetworkTimeoutException('cURL error 28: timeout', $request->toPsrRequest())), true];
     }
 
     #[DataProvider('failures')]
