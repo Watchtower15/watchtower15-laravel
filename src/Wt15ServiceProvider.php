@@ -52,6 +52,9 @@ final class Wt15ServiceProvider extends ServiceProvider
 
     public function register(): void
     {
+        // The package's own config beneath the application's, so the environment variables it names (`WT15_LOGS_TOKEN`, …) work with no
+        // published file. Settings still merges `buffer`, `flush` and `log` key by key.
+        $this->mergeConfigFrom(__DIR__ . '/../config/wt15.php', 'wt15');
         // One instance for every clone of the application Octane makes (D10): a plain object with no I/O.
         $this->app->instance(BufferedChannels::class, new BufferedChannels());
         $this->app->singleton(LaravelTransport::class);

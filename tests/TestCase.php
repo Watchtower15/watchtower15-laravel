@@ -71,7 +71,9 @@ abstract class TestCase extends Orchestra
         $config->set('cache.prefix', 'wt15test');
         $config->set('logging.default', 'spy');
         $config->set('logging.channels.spy', ['driver' => 'monolog', 'handler' => TestHandler::class, 'level' => 'debug']);
-        $config->set('wt15', array_replace_recursive(['buffer' => ['prefix' => $this->prefix]], $this->wt15Config()));
+        // The package's own config is already merged beneath (its provider registered first), as in an application that never published it.
+        $current = $config->get('wt15', []);
+        $config->set('wt15', array_replace(is_array($current) ? $current : [], array_replace_recursive(['buffer' => ['prefix' => $this->prefix]], $this->wt15Config())));
         $this->defineMore($app);
     }
 
