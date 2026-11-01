@@ -154,6 +154,47 @@ listed by `wt15:test` and `wt15:metrics` and named in the run's record (`wt15_co
 to the default channel. A flush run writes at most one record of its own (a `Deprecation` or `Sunset` warning from the metric client
 aside), and it names the disabled rows.
 
+## The `watchtower15` log driver
+
+The `watchtower15` log driver sends a request's, job's or command's log lines to WatchTower15 log ingest after it ends. Add a channel to
+`config/logging.php`:
+
+```php
+'watchtower15' => [
+    'driver' => 'watchtower15',
+    'name' => 'my-app',                 // the stream name in WatchTower15; also used when the channel is part of a stack
+    'level' => env('WT15_LOG_LEVEL', 'warning'),
+    'buffer_limit' => 100,              // lines held before a push during the request; 0 holds every line to the end
+    'replace_placeholders' => true,     // {placeholders} interpolated, as the skeleton's own channels do
+],
+```
+
+and put it in a stack (`LOG_STACK=single,watchtower15`) or use it alone. **Every line is billed per GB**, so pick `level` with care.
+Set `WT15_LOGS_TOKEN` (and `WT15_INGEST_URL` only for a non-default host). On a host that runs the WatchTower15 agent, the agent's file
+tail is the better path.
+
+* **When lines are sent.** At `terminating` (after the response under PHP-FPM, per request under Octane; after every Artisan command),
+  after each queue job (`JobProcessed`, `JobFailed`, `JobReleasedAfterException`) and at `WorkerStopping`, and during a request or job
+  for every `buffer_limit` lines past the first. A job on the `sync` connection runs inside the request that dispatched it, so its
+  lines go with that request's. A long-running command that never terminates (a consumer loop, `reverb:start`) sends only at each
+  `buffer_limit` lines and at its exit.
+* **Laravel Vapor** (and any host that freezes the environment once the invocation has answered): the after-response push can be frozen,
+  so add a middleware that calls `Log::channel('watchtower15')->getLogger()->close()` after `$next($request)`. The push then counts in
+  the invocation's time.
+* **The breaker's files** are in `storage/framework/cache/wt15/`. The web server's user, the queue workers, the scheduler and every
+  Artisan run must be able to write there, as Laravel's own `storage/` requires.
+* **Reports.** Failures never reach the application. A flush that cannot send writes one record through `wt15.log.channel` at `wt15.log.level`:
+  `WatchTower15 logs: lines not sent: <reason> <lines>`, with `wt15_report`, `wt15_lines` and `wt15_until` in its context (alert on
+  them). When two `watchtower15` channels share a stack with `daily`, point `wt15.log.channel` at a channel without a `watchtower15`
+  member, so a report is not buffered by the second one.
+* **Limits.** Log ingest takes 600 pushes a minute per token, and the driver sends one push per request, job or command that logs at
+  or above the channel's level (more past `buffer_limit`), from every host on that token. Above about ten logging requests a second per
+  token, lines are lost: raise the level, use a token per service, or use the agent's file tail. A held or stopped ingest drops lines
+  without a request, as the core's README describes.
+* **Tests.** Under `APP_ENV=testing` the lines go to a fake client and never leave, unless `wt15.fake_in_tests` is `false`.
+  `Wt15::fake()` records them: `$fake->assertLogged($level, $contains)`, `$fake->assertNothingLogged()` and `$fake->loggedLines()`,
+  each flushing the channels first; `assertNothingRecorded()` covers log lines too.
+
 ## Two clients
 
 The facade's `Client` carries all three credentials. The metrics pipe has a `Client` of its own that holds the metric token and the

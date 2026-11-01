@@ -5,10 +5,16 @@ declare(strict_types=1);
 namespace WatchTower15\Laravel;
 
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Container\Container;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Log\LogManager;
+use Illuminate\Queue\Events\JobFailed;
+use Illuminate\Queue\Events\JobProcessed;
+use Illuminate\Queue\Events\JobReleasedAfterException;
+use Illuminate\Queue\Events\WorkerStopping;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\ServiceProvider;
 use WatchTower15\Client;
@@ -19,6 +25,8 @@ use WatchTower15\Laravel\Console\MetricsCommand;
 use WatchTower15\Laravel\Console\TestCommand;
 use WatchTower15\Laravel\Http\LaravelTransport;
 use WatchTower15\Laravel\Log\LevelLogger;
+use WatchTower15\Laravel\Logs\BufferedChannels;
+use WatchTower15\Laravel\Logs\WatchTower15LogDriver;
 use WatchTower15\Laravel\Metrics\CacheBucketStore;
 use WatchTower15\Laravel\Metrics\ContainerTokenProvider;
 use WatchTower15\Laravel\Metrics\FlushRunner;
@@ -44,6 +52,8 @@ final class Wt15ServiceProvider extends ServiceProvider
 
     public function register(): void
     {
+        // One instance for every clone of the application Octane makes (D10): a plain object with no I/O.
+        $this->app->instance(BufferedChannels::class, new BufferedChannels());
         $this->app->singleton(LaravelTransport::class);
         $this->app->singleton(ContainerTokenProvider::class);
         $this->app->singleton(ClientFactory::class);
@@ -92,6 +102,17 @@ final class Wt15ServiceProvider extends ServiceProvider
                 $pipe->ingestProblem() === null ? $pipe->settings()->ingestUrl() : null,
                 $app->make(LevelLogger::class),
             );
+        });
+
+        // The log channels' Client: the logs token and the ingest URL alone (D9). A malformed token or a refused URL throws the core's
+        // ConfigurationException here, which the log shipper catches and counts as `config`.
+        $this->app->scoped('wt15.logs.client', static function (Application $app): Client {
+            $settings = $app->make(Settings::class);
+            if ($app->environment('testing') && $settings->fakeInTests()) {
+                return new FakeClient();
+            }
+
+            return $app->make(ClientFactory::class)->make(null, null, $settings->logsToken(), null, $settings->ingestUrl(), $app->make(LevelLogger::class));
         });
 
         $this->app->scoped(CacheBucketStore::class, static function (Application $app): CacheBucketStore {
@@ -161,10 +182,62 @@ final class Wt15ServiceProvider extends ServiceProvider
             }
         });
 
+        $this->bootLogs();
+
         if ($settings->afterResponse()) {
             $this->app->terminating(static function (Application $app): void {
                 self::flushAfterResponse($app);
             });
+        }
+    }
+
+    /**
+     * The `watchtower15` log driver and the points where a channel's buffered lines are sent (D9, D10). Registering resolves nothing:
+     * the driver is added when the log manager is first resolved.
+     */
+    private function bootLogs(): void
+    {
+        $this->callAfterResolving('log', static function (mixed $manager, Application $app): void {
+            if ($manager instanceof LogManager) {
+                $manager->extend('watchtower15', fn (Application $app, array $config) => (new WatchTower15LogDriver())($app, $config));
+            }
+        });
+        $this->app->terminating(static function (Application $app): void {
+            self::flushLogs($app);
+        });
+        $events = $this->app->make(Dispatcher::class);
+        foreach ([JobProcessed::class, JobFailed::class, JobReleasedAfterException::class] as $event) {
+            $events->listen($event, static function (object $job): void {
+                $connection = $job->connectionName ?? null;
+                if (is_string($connection) && self::isSync($connection)) {
+                    return;
+                }
+                self::flushLogs(null);
+            });
+        }
+        $events->listen(WorkerStopping::class, static function (): void {
+            self::flushLogs(null);
+        });
+    }
+
+    /** A `sync` job runs inside the request that dispatched it: its lines go with that request's. */
+    private static function isSync(string $connection): bool
+    {
+        $config = Container::getInstance()->make(Repository::class);
+        $driver = $config->get('queue.connections.' . $connection . '.driver');
+
+        return $driver === 'sync' || ($driver === null && $connection === 'sync');
+    }
+
+    private static function flushLogs(?Application $app): void
+    {
+        try {
+            $channels = ($app ?? Container::getInstance())->make(BufferedChannels::class);
+            if ($channels instanceof BufferedChannels) {
+                $channels->flushAll();
+            }
+        } catch (\Throwable) {
+            // Nothing reaches the application.
         }
     }
 

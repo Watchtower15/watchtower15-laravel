@@ -6,7 +6,9 @@ namespace WatchTower15\Laravel\Testing;
 
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Config\Repository;
+use PHPUnit\Framework\Assert;
 use WatchTower15\Laravel\Config\MetricDefinition;
+use WatchTower15\Laravel\Logs\BufferedChannels;
 use WatchTower15\Laravel\Metrics\Pipe;
 use WatchTower15\Laravel\Wt15Manager;
 use WatchTower15\Metrics\Aggregator;
@@ -89,6 +91,51 @@ final class Wt15Fake extends Wt15Manager
     public function assertNothingRecorded(): void
     {
         $this->fake->assertNothingRecorded();
+        $this->assertNothingLogged();
+    }
+
+    /**
+     * The log lines the `watchtower15` channels sent into the fake, after flushing what they hold (what the request would send).
+     *
+     * @return list<array{level: string, message: string, stream: ?string}>
+     */
+    public function loggedLines(): array
+    {
+        $this->flushChannels();
+        $lines = [];
+        foreach ($this->fake->client()->pushedLines() as $line) {
+            $lines[] = [
+                'level' => is_string($line['log_level'] ?? null) ? $line['log_level'] : '',
+                'message' => is_string($line['message'] ?? null) ? $line['message'] : '',
+                'stream' => is_string($line['stream_name'] ?? null) ? $line['stream_name'] : null,
+            ];
+        }
+
+        return $lines;
+    }
+
+    public function assertLogged(string $level, string $contains): void
+    {
+        foreach ($this->loggedLines() as $line) {
+            if ($line['level'] === strtolower($level) && str_contains($line['message'], $contains)) {
+                return;
+            }
+        }
+
+        Assert::fail(sprintf('No %s log line containing "%s" was sent.', $level, $contains));
+    }
+
+    public function assertNothingLogged(): void
+    {
+        $count = count($this->loggedLines());
+        if ($count > 0) {
+            Assert::fail(sprintf('Expected no log line to be sent; %d were.', $count));
+        }
+    }
+
+    private function flushChannels(): void
+    {
+        Container::getInstance()->make(BufferedChannels::class)->flushAll();
     }
 
     protected function aggregator(): Aggregator

@@ -32,6 +32,39 @@ final class Wire
         ]);
     }
 
+    /** Log ingest accepts every line of a POST, or answers as `$answer` says. */
+    public static function logs(?callable $answer = null): void
+    {
+        Http::fake([
+            '*/api/log-sources/ingest' => static fn (Request $request): PromiseInterface => $answer !== null ? $answer($request) : self::loggedLines(count(self::lines($request))),
+        ]);
+    }
+
+    public static function loggedLines(int $lines): PromiseInterface
+    {
+        return self::from(MockTransport::logsAccepted($lines));
+    }
+
+    public static function status(int $status): PromiseInterface
+    {
+        return self::from(MockTransport::envelope($status, [], 'no'));
+    }
+
+    public static function logStop(int $retryAfter = 3600): PromiseInterface
+    {
+        return self::from(MockTransport::envelope(429, ['code' => 'log_volume_limit_reached'], 'Stop', ['Retry-After' => (string) $retryAfter]));
+    }
+
+    /** @return list<array<string, mixed>> the lines of a log ingest POST */
+    public static function lines(Request $request): array
+    {
+        $raw = $request->body();
+        $text = str_starts_with($raw, "\x1f\x8b") ? (string) gzdecode($raw) : $raw;
+        $body = json_decode($text, true);
+
+        return is_array($body) && is_array($body['lines'] ?? null) ? array_values($body['lines']) : [];
+    }
+
     /** @return list<array<string, mixed>> the points of an ingest POST */
     public static function points(Request $request): array
     {
