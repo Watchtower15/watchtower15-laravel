@@ -155,12 +155,16 @@ final class TransportTest extends TestCase
         for ($i = 0; $i < 10; $i++) {
             $requests[] = $this->request(str_repeat('x', 3 * 1024 * 1024));
         }
+        // Whether an object left by an earlier test or by the fake's recording is already freed depends on when PHP's cycle collector
+        // last ran, which shifts with the tests loaded in the process; collect before each count so the count is the adapter's alone.
+        gc_collect_cycles();
         $before = self::tempLinks();
 
         foreach ($requests as $request) {
             (new LaravelTransport())->send($request, new TransportOptions(3.0, 1.0));
         }
 
+        gc_collect_cycles();
         self::assertSame($before, self::tempLinks(), 'the only temp files are the ten bodies\' own');
     }
 
